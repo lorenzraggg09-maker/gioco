@@ -104,11 +104,11 @@ spawn_timer = 0
 
 
 # 👇 Goku come player (immagine dentro la cartella progetto)
-player = Character(200, "progetto/goku.png")
+player = Character(200, "goku_GIOCO.png")
 
 
 # Per ora il nemico usa la stessa immagine
-enemy = Character(600, "progetto/goku.png")
+enemy = Character(600, "goku_GIOCO.png")
 
 
 running = True
