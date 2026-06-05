@@ -12,6 +12,8 @@ FPS = 60
 
 WHITE = (255, 255, 255)
 RED = (255, 0, 0)
+GREEN = (0, 255, 0)
+GRAY = (100, 100, 100)
 BLUE = (50, 150, 255)
 
 lane_width = WIDTH // 4
@@ -21,6 +23,7 @@ hit_window = 40
 
 font = pygame.font.SysFont("arial", 40)
 big_font = pygame.font.SysFont("arial", 50, bold=True)
+small_font = pygame.font.SysFont("arial", 30)
 
 key_map = {
     pygame.K_LEFT: 0,
@@ -97,7 +100,7 @@ class Note:
         screen.blit(img, rect)
 
 # ------------------------
-# PERSONAGGIO CENTRATO
+# PERSONAGGIO CENTRATO (AGGIORNATO)
 # ------------------------
 class Character:
     def __init__(self, image_path):
@@ -107,6 +110,10 @@ class Character:
         self.y = 520
         self.base_y = self.y
         self.anim_timer = 0
+        
+        # Variabili per l'animazione di morte
+        self.angle = 0
+        self.death_y = self.y
 
     def animate(self):
         self.anim_timer = 10
@@ -117,6 +124,17 @@ class Character:
             self.anim_timer -= 1
         else:
             self.y = self.base_y
+
+    def update_death(self):
+        # Ruota il personaggio e lo fa cadere verso il basso
+        self.angle += 5
+        self.death_y += 4
+
+    def draw_death(self):
+        # Ruota l'immagine originale in base all'angolo corrente
+        rotated_image = pygame.transform.rotate(self.image, self.angle)
+        rect = rotated_image.get_rect(midbottom=(self.x, int(self.death_y)))
+        screen.blit(rotated_image, rect)
 
     def draw(self):
         rect = self.image.get_rect(midbottom=(self.x, self.y))
@@ -159,51 +177,81 @@ def menu():
 def game():
     score = 0
     health = 100
+    max_health = 100
     notes = []
     spawn_timer = 0
 
+    hit_notes = 0
+    total_notes_spawned = 0
+
     player = Character("goku_GIOCO.png")
 
+    game_over_text = big_font.render("GAME OVER", True, RED)
+    final_go_x = WIDTH // 2
+    final_go_y = HEIGHT // 2
+    go_x = WIDTH + game_over_text.get_width() 
+    go_target_x = final_go_x
+    animation_timer = 0
+
     running = True
+    game_state = "PLAYING"
+
     while running:
         clock.tick(FPS)
         draw_game_background()
-
-        spawn_timer += 1
-        if spawn_timer > 20:
-            notes.append(Note(random.randint(0, 3)))
-            spawn_timer = 0
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
 
-            if event.type == pygame.KEYDOWN:
-                if event.key in key_map:
-                    lane = key_map[event.key]
-                    hit = False
+            if game_state == "PLAYING":
+                if event.type == pygame.KEYDOWN:
+                    if event.key in key_map:
+                        lane = key_map[event.key]
+                        hit = False
 
-                    for note in notes:
-                        if note.lane == lane and abs(note.y - hit_line_y) < hit_window:
-                            notes.remove(note)
-                            player.animate()
-                            score += 10
-                            hit = True
-                            break
+                        for note in notes:
+                            if note.lane == lane and abs(note.y - hit_line_y) < hit_window:
+                                notes.remove(note)
+                                player.animate()
+                                score += 10
+                                hit_notes += 1
+                                total_notes_spawned += 1
+                                hit = True
+                                break
 
-                    if not hit:
-                        health -= 5
+                        if not hit:
+                            health -= 5
+                            total_notes_spawned += 1
+                            if health < 0: health = 0
 
-        for note in notes[:]:
-            note.update()
-            if note.y > HEIGHT:
-                notes.remove(note)
-                health -= 5
+        if game_state == "PLAYING":
+            spawn_timer += 1
+            if spawn_timer > 20:
+                notes.append(Note(random.randint(0, 3)))
+                spawn_timer = 0
 
-        player.update()
+            for note in notes[:]:
+                note.update()
+                if note.y > HEIGHT:
+                    notes.remove(note)
+                    health -= 5
+                    total_notes_spawned += 1
+                    if health < 0: health = 0
 
-        # Frecce fisse in basso
+            player.update()
+
+            if health <= 0:
+                game_state = "GAMEOVER"
+                # Imposta la posizione iniziale di morte uguale alla posizione corrente
+                player.death_y = player.y
+
+        # Gestione aggiornamenti di morte
+        if game_state == "GAMEOVER":
+            player.update_death()
+
+        # Disegna elementi statici e dinamici
         for i in range(4):
             x = i * lane_width + lane_width // 2
             img = arrow_images[i]
@@ -212,22 +260,53 @@ def game():
 
         for note in notes:
             note.draw()
+            
+        # Sceglie come disegnare il giocatore in base allo stato
+        if game_state == "PLAYING":
+            player.draw()
+        else:
+            player.draw_death()
 
-        player.draw()
+        # UI di gioco (visibile solo mentre giochi)
+        if game_state == "PLAYING":
+            score_text = font.render(f"Score: {score}", True, WHITE)
+            screen.blit(score_text, (10, 10))
 
-        score_text = font.render(f"Score: {score}", True, WHITE)
-        health_text = font.render(f"Health: {health}", True, WHITE)
+            bar_width = 200
+            bar_height = 25
+            bar_x = 10
+            bar_y = 65
+            pygame.draw.rect(screen, GRAY, (bar_x, bar_y, bar_width, bar_height), border_radius=5)
+            health_color = GREEN if health > 30 else RED
+            current_bar_width = int((health / max_health) * bar_width)
+            if current_bar_width > 0:
+                pygame.draw.rect(screen, health_color, (bar_x, bar_y, current_bar_width, bar_height), border_radius=5)
+            health_text = small_font.render(f"HP: {health}%", True, WHITE)
+            screen.blit(health_text, (bar_x + 5, bar_y - 25))
 
-        screen.blit(score_text, (10, 10))
-        screen.blit(health_text, (10, 60))
+            if total_notes_spawned > 0:
+                accuracy = (hit_notes / total_notes_spawned) * 100
+            else:
+                accuracy = 100.0
+            accuracy_text = font.render(f"Accuracy: {accuracy:.1f}%", True, WHITE)
+            screen.blit(accuracy_text, (WIDTH - accuracy_text.get_width() - 20, 10))
 
-        if health <= 0:
-            game_over = big_font.render("GAME OVER", True, RED)
-            screen.blit(game_over,
-                        (WIDTH//2 - game_over.get_width()//2, HEIGHT//2))
-            pygame.display.flip()
-            pygame.time.wait(3000)
-            return
+        # Animazione cinematica Game Over
+        if game_state == "GAMEOVER":
+            if go_x > go_target_x:
+                dist_to_target = go_x - go_target_x
+                current_speed = max(2, (dist_to_target * 0.1))
+                go_x -= current_speed
+                if go_x < go_target_x:
+                    go_x = go_target_x
+
+            rect = game_over_text.get_rect(center=(int(go_x), final_go_y))
+            screen.blit(game_over_text, rect)
+
+            if go_x <= go_target_x:
+                animation_timer += 1
+                if animation_timer > 180:
+                    return
 
         pygame.display.flip()
 
