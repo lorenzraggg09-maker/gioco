@@ -4,26 +4,41 @@ import sys
 
 pygame.init()
 
+# Inizializzazione sicura del mixer audio
+music_loaded = False
+try:
+    pygame.mixer.init()
+    pygame.mixer.music.load("musica.mp3")
+    music_loaded = True
+except Exception as e:
+    print("Nota: Musica non trovata. Il gioco andrà senza audio.")
+
 WIDTH, HEIGHT = 800, 600
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("GIOCO DI MOMO E LORE")
 clock = pygame.time.Clock()
 FPS = 60
 
+# COLORI
 WHITE = (255, 255, 255)
-RED = (255, 0, 0)
-GREEN = (0, 255, 0)
+RED = (255, 50, 50)
+GREEN = (50, 255, 50)
 GRAY = (100, 100, 100)
 BLUE = (50, 150, 255)
+GOLD = (255, 215, 0)
+ORANGE = (255, 165, 0)
 
 lane_width = WIDTH // 4
 hit_line_y = HEIGHT - 120
 note_speed = 5
-hit_window = 40
+
+# ALLARGATA HITBOX TOTALE A 60 PIXEL
+hit_window_total = 60 
 
 font = pygame.font.SysFont("arial", 40)
 big_font = pygame.font.SysFont("arial", 50, bold=True)
 small_font = pygame.font.SysFont("arial", 30)
+rating_font = pygame.font.SysFont("impact", 45) # Font bello impattante per i giudizi
 
 key_map = {
     pygame.K_LEFT: 0,
@@ -48,18 +63,14 @@ for i in range(4):
 # ------------------------
 # SFONDO MENU
 # ------------------------
-circles = [[random.randint(0, WIDTH),
-            random.randint(0, HEIGHT),
-            random.randint(30, 80)] for _ in range(8)]
+circles = [[random.randint(0, WIDTH), random.randint(0, HEIGHT), random.randint(30, 80)] for _ in range(8)]
 
 def draw_menu_background():
     for y in range(HEIGHT):
         color = (40 + y // 8, 0, 80 + y // 6)
         pygame.draw.line(screen, color, (0, y), (WIDTH, y))
-
     for circle in circles:
-        pygame.draw.circle(screen, (100, 0, 200),
-                           (circle[0], int(circle[1])), circle[2], 2)
+        pygame.draw.circle(screen, (100, 0, 200), (circle[0], int(circle[1])), circle[2], 2)
         circle[1] += 0.5
         if circle[1] - circle[2] > HEIGHT:
             circle[0] = random.randint(0, WIDTH)
@@ -74,7 +85,6 @@ def draw_game_background():
     for y in range(HEIGHT):
         color = (10, 10, 40 + y // 10)
         pygame.draw.line(screen, color, (0, y), (WIDTH, y))
-
     for star in stars:
         pygame.draw.circle(screen, WHITE, star, 2)
         star[1] += 1
@@ -100,44 +110,50 @@ class Note:
         screen.blit(img, rect)
 
 # ------------------------
-# PERSONAGGIO CENTRATO (AGGIORNATO)
+# PERSONAGGIO CENTRATO
 # ------------------------
 class Character:
     def __init__(self, image_path):
         self.image = pygame.image.load(image_path).convert_alpha()
         self.image = pygame.transform.scale(self.image, (160, 200))
-        self.x = WIDTH // 2
-        self.y = 520
-        self.base_y = self.y
-        self.anim_timer = 0
+        self.base_x = WIDTH // 2
+        self.base_y = 520
+        self.x = self.base_x
+        self.y = self.base_y
         
-        # Variabili per l'animazione di morte
-        self.angle = 0
-        self.death_y = self.y
+        self.offset_x = 0
+        self.offset_y = 0
+        self.return_speed = 4  
 
-    def animate(self):
-        self.anim_timer = 10
+        self.angle = 0
+        self.death_y = self.base_y
+
+    def dash(self, direction):
+        if direction == 0:    self.offset_x = -40
+        elif direction == 1:  self.offset_y = 40
+        elif direction == 2:  self.offset_y = -40
+        elif direction == 3:  self.offset_x = 40
 
     def update(self):
-        if self.anim_timer > 0:
-            self.y = self.base_y - 20
-            self.anim_timer -= 1
-        else:
-            self.y = self.base_y
+        if self.offset_x > 0: self.offset_x = max(0, self.offset_x - self.return_speed)
+        if self.offset_x < 0: self.offset_x = min(0, self.offset_x + self.return_speed)
+        if self.offset_y > 0: self.offset_y = max(0, self.offset_y - self.return_speed)
+        if self.offset_y < 0: self.offset_y = min(0, self.offset_y + self.return_speed)
+
+        self.x = self.base_x + self.offset_x
+        self.y = self.base_y + self.offset_y
 
     def update_death(self):
-        # Ruota il personaggio e lo fa cadere verso il basso
         self.angle += 5
         self.death_y += 4
 
     def draw_death(self):
-        # Ruota l'immagine originale in base all'angolo corrente
         rotated_image = pygame.transform.rotate(self.image, self.angle)
-        rect = rotated_image.get_rect(midbottom=(self.x, int(self.death_y)))
+        rect = rotated_image.get_rect(midbottom=(self.base_x, int(self.death_y)))
         screen.blit(rotated_image, rect)
 
     def draw(self):
-        rect = self.image.get_rect(midbottom=(self.x, self.y))
+        rect = self.image.get_rect(midbottom=(int(self.x), int(self.y)))
         screen.blit(self.image, rect)
 
 # ------------------------
@@ -146,7 +162,6 @@ class Character:
 def menu():
     while True:
         draw_menu_background()
-
         title = big_font.render("GIOCO DI MOMO E LORE", True, WHITE)
         screen.blit(title, (WIDTH//2 - title.get_width()//2, 170))
 
@@ -154,16 +169,12 @@ def menu():
         pygame.draw.rect(screen, BLUE, button_rect, border_radius=20)
 
         button_text = font.render("GIOCA", True, WHITE)
-        screen.blit(button_text, (
-            button_rect.centerx - button_text.get_width()//2,
-            button_rect.centery - button_text.get_height()//2
-        ))
+        screen.blit(button_text, (button_rect.centerx - button_text.get_width()//2, button_rect.centery - button_text.get_height()//2))
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
-
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if button_rect.collidepoint(event.pos):
                     return
@@ -179,7 +190,6 @@ def game():
     health = 100
     max_health = 100
     notes = []
-    spawn_timer = 0
 
     hit_notes = 0
     total_notes_spawned = 0
@@ -193,6 +203,21 @@ def game():
     go_target_x = final_go_x
     animation_timer = 0
 
+    # Gestione scritte di giudizio (Perfect, Good, Bad, Trash)
+    current_rating = ""
+    rating_color = WHITE
+    rating_timer = 0
+
+    if music_loaded:
+        try: pygame.mixer.music.play()
+        except: pass
+
+    BPM = 130  
+    ms_per_beat = (60 / BPM) * 1000  
+    
+    start_time = pygame.time.get_ticks()
+    last_beat_index = 0 
+
     running = True
     game_state = "PLAYING"
 
@@ -202,6 +227,7 @@ def game():
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
+                if music_loaded: pygame.mixer.music.stop()
                 pygame.quit()
                 sys.exit()
 
@@ -212,46 +238,73 @@ def game():
                         hit = False
 
                         for note in notes:
-                            if note.lane == lane and abs(note.y - hit_line_y) < hit_window:
-                                notes.remove(note)
-                                player.animate()
-                                score += 10
-                                hit_notes += 1
-                                total_notes_spawned += 1
-                                hit = True
-                                break
+                            if note.lane == lane:
+                                distance = abs(note.y - hit_line_y)
+                                
+                                if distance <= hit_window_total:
+                                    notes.remove(note)
+                                    player.dash(lane)
+                                    total_notes_spawned += 1
+                                    hit_notes += 1
+                                    hit = True
+                                    
+                                    if distance <= 15:
+                                        current_rating = "PERFECT"
+                                        rating_color = GOLD
+                                        score += 15
+                                        health = min(max_health, health + 5)
+                                    elif distance <= 35:
+                                        current_rating = "GOOD"
+                                        rating_color = GREEN
+                                        score += 10
+                                        health = min(max_health, health + 3)
+                                    else:
+                                        current_rating = "BAD"
+                                        rating_color = ORANGE
+                                        score += 2
+                                        
+                                    rating_timer = 30 
+                                    break
 
                         if not hit:
+                            # --- CAMBIATO: DA "MISS" A "TRASH" QUANDO PREMI A VUOTO ---
                             health -= 5
                             total_notes_spawned += 1
+                            current_rating = "TRASH"
+                            rating_color = RED
+                            rating_timer = 30
                             if health < 0: health = 0
 
         if game_state == "PLAYING":
-            spawn_timer += 1
-            if spawn_timer > 20:
+            current_game_time = pygame.time.get_ticks() - start_time
+            current_beat_index = int(current_game_time / ms_per_beat)
+            
+            if current_beat_index > last_beat_index:
                 notes.append(Note(random.randint(0, 3)))
-                spawn_timer = 0
+                last_beat_index = current_beat_index
 
             for note in notes[:]:
                 note.update()
                 if note.y > HEIGHT:
+                    # --- CAMBIATO: DA "MISS" A "TRASH" QUANDO LA NOTA SCAPPA VIA ---
                     notes.remove(note)
-                    health -= 5
+                    health -= 5 
                     total_notes_spawned += 1
+                    current_rating = "TRASH"
+                    rating_color = RED
+                    rating_timer = 30
                     if health < 0: health = 0
 
             player.update()
 
             if health <= 0:
                 game_state = "GAMEOVER"
-                # Imposta la posizione iniziale di morte uguale alla posizione corrente
+                if music_loaded: pygame.mixer.music.stop()
                 player.death_y = player.y
 
-        # Gestione aggiornamenti di morte
         if game_state == "GAMEOVER":
             player.update_death()
 
-        # Disegna elementi statici e dinamici
         for i in range(4):
             x = i * lane_width + lane_width // 2
             img = arrow_images[i]
@@ -261,13 +314,18 @@ def game():
         for note in notes:
             note.draw()
             
-        # Sceglie come disegnare il giocatore in base allo stato
         if game_state == "PLAYING":
             player.draw()
+            
+            if rating_timer > 0:
+                text_surf = rating_font.render(current_rating, True, rating_color)
+                text_rect = text_surf.get_rect(center=(WIDTH // 2, 280))
+                screen.blit(text_surf, text_rect)
+                rating_timer -= 1
         else:
             player.draw_death()
 
-        # UI di gioco (visibile solo mentre giochi)
+        # UI di gioco
         if game_state == "PLAYING":
             score_text = font.render(f"Score: {score}", True, WHITE)
             screen.blit(score_text, (10, 10))
@@ -291,7 +349,7 @@ def game():
             accuracy_text = font.render(f"Accuracy: {accuracy:.1f}%", True, WHITE)
             screen.blit(accuracy_text, (WIDTH - accuracy_text.get_width() - 20, 10))
 
-        # Animazione cinematica Game Over
+        # Animazione Game Over
         if game_state == "GAMEOVER":
             if go_x > go_target_x:
                 dist_to_target = go_x - go_target_x
