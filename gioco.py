@@ -37,6 +37,7 @@ mountain_far = []
 mountain_near = []
 leaderboard_cache = []
 leaderboard_last_refresh = None
+leaderboard_refresh_interval = 1.0
 LEADERBOARD_FILE = "leaderboard.json"
 
 
@@ -107,10 +108,10 @@ def load_leaderboard_file():
     return leaderboard_cache
 
 
-def get_leaderboard():
+def get_leaderboard(force=False):
     global leaderboard_last_refresh
     now = datetime.now()
-    if leaderboard_last_refresh is None or (now - leaderboard_last_refresh).total_seconds() >= 3600:
+    if force or leaderboard_last_refresh is None or (now - leaderboard_last_refresh).total_seconds() >= leaderboard_refresh_interval:
         load_leaderboard_file()
         leaderboard_last_refresh = now
     return leaderboard_cache
@@ -433,6 +434,7 @@ def menu():
         screen.blit(title, (WIDTH//2 - title.get_width()//2, 150))
 
         if leaderboard_open:
+            entries = get_leaderboard(force=True)
             overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
             overlay.fill((0, 0, 0, 180))
             screen.blit(overlay, (0, 0))
@@ -444,7 +446,6 @@ def menu():
             board_title = big_font.render("CLASSIFICA", True, GOLD)
             screen.blit(board_title, (panel.centerx - board_title.get_width()//2, panel.y + 18))
 
-            entries = get_leaderboard()
             y = panel.y + 90
             for i, entry in enumerate(entries[:8]):
                 rank = f"{i+1}."
