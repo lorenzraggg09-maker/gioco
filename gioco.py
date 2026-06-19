@@ -5,6 +5,9 @@ import random
 import sys
 import time
 import math
+import urllib.request
+import urllib.parse
+import urllib.error
 from datetime import datetime
 
 pygame.init()
@@ -39,6 +42,7 @@ leaderboard_cache = []
 leaderboard_last_refresh = None
 leaderboard_refresh_interval = 1.0
 LEADERBOARD_FILE = "leaderboard.json"
+LEADERBOARD_URL = os.environ.get("LEADERBOARD_URL", "")
 
 
 def toggle_fullscreen():
@@ -87,20 +91,34 @@ def update_layout():
 update_layout()
 
 
+def _sort_leaderboard(data):
+    if not isinstance(data, list):
+        return []
+    return sorted(
+        data,
+        key=lambda item: (item.get("score", 0), item.get("accuracy", 0)),
+        reverse=True
+    )
+
+
 def load_leaderboard_file():
     global leaderboard_cache
+    if LEADERBOARD_URL:
+        try:
+            req = urllib.request.Request(LEADERBOARD_URL, headers={"User-Agent": "pygame-leaderboard"})
+            with urllib.request.urlopen(req, timeout=3) as response:
+                data = json.load(response)
+            leaderboard_cache = _sort_leaderboard(data)
+            return leaderboard_cache
+        except Exception:
+            # fallback locale se il server remoto non è disponibile
+            pass
+
     if os.path.exists(LEADERBOARD_FILE):
         try:
             with open(LEADERBOARD_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if isinstance(data, list):
-                leaderboard_cache = sorted(
-                    data,
-                    key=lambda item: (item.get("score", 0), item.get("accuracy", 0)),
-                    reverse=True
-                )
-            else:
-                leaderboard_cache = []
+            leaderboard_cache = _sort_leaderboard(data)
         except Exception:
             leaderboard_cache = []
     else:
@@ -125,16 +143,33 @@ def save_leaderboard_entry(score_value, accuracy_value, grade_value, difficulty_
         "difficulty": difficulty_value,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
+
+    if LEADERBOARD_URL:
+        try:
+            payload = json.dumps([entry]).encode("utf-8")
+            req = urllib.request.Request(
+                LEADERBOARD_URL,
+                data=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "pygame-leaderboard"
+                },
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=5) as response:
+                data = json.load(response)
+            leaderboard_cache = _sort_leaderboard(data)
+            return leaderboard_cache
+        except Exception:
+            pass
+
     data = load_leaderboard_file()
     data.append(entry)
-    data = sorted(
-        data,
-        key=lambda item: (item.get("score", 0), item.get("accuracy", 0)),
-        reverse=True
-    )[:10]
+    data = _sort_leaderboard(data)[:10]
     with open(LEADERBOARD_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    return data
+    leaderboard_cache = data
+    return leaderboard_cache
 
 # COLORI
 WHITE = (255, 255, 255)
