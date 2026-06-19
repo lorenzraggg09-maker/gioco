@@ -1,8 +1,11 @@
+import json
+import os
 import pygame
 import random
 import sys
 import time
 import math
+from datetime import datetime
 
 pygame.init()
 
@@ -19,13 +22,118 @@ try:
 except Exception as e:
     print("Nota: Musica non trouvata. Il gioco andrà senza audio.")
 
-WIDTH, HEIGHT = 800, 600
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
+WINDOW_WIDTH, WINDOW_HEIGHT = 1280, 720
+fullscreen = False
+screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+WIDTH, HEIGHT = screen.get_size()
 pygame.display.set_caption("GIOCO DI MOMO E LORE")
 clock = pygame.time.Clock()
 FPS = 60  
 fps_options = [30, 60, 120]
 fps_index = 1  
+
+menu_arrows = []
+mountain_far = []
+mountain_near = []
+leaderboard_cache = []
+leaderboard_last_refresh = None
+LEADERBOARD_FILE = "leaderboard.json"
+
+
+def toggle_fullscreen():
+    global fullscreen, screen, WIDTH, HEIGHT
+    fullscreen = not fullscreen
+    if fullscreen:
+        screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+    else:
+        screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    WIDTH, HEIGHT = screen.get_size()
+    update_layout()
+
+
+def update_layout():
+    global WIDTH, HEIGHT, lane_width, lane_spacing, lane_group_width, lane_offset, hit_line_y
+    WIDTH, HEIGHT = screen.get_size()
+    lane_width = max(56, min(110, int(WIDTH * 0.08)))
+    lane_spacing = max(12, int(WIDTH * 0.012))
+    lane_group_width = 4 * lane_width + 3 * lane_spacing
+    lane_offset = max(0, (WIDTH - lane_group_width) // 2)
+    hit_line_y = int(HEIGHT * 0.84)
+
+    menu_arrows.clear()
+    for _ in range(18):
+        lane = random.randint(0, 3)
+        x = lane_offset + lane * (lane_width + lane_spacing) + lane_width // 2
+        y = random.randint(-700, 0)
+        speed = random.uniform(2.5, 5.1)
+        menu_arrows.append([lane, x, y, speed])
+
+    mountain_far.clear()
+    mountain_near.clear()
+    x_pop = 0
+    while x_pop < WIDTH + 60:
+        h = random.randint(int(HEIGHT * 0.38), int(HEIGHT * 0.58))
+        mountain_far.append((x_pop, h))
+        x_pop += max(32, int(WIDTH * 0.03))
+
+    x_pop = 0
+    while x_pop < WIDTH + 40:
+        h = random.randint(int(HEIGHT * 0.58), int(HEIGHT * 0.78))
+        mountain_near.append((x_pop, h))
+        x_pop += max(22, int(WIDTH * 0.018))
+
+
+update_layout()
+
+
+def load_leaderboard_file():
+    global leaderboard_cache
+    if os.path.exists(LEADERBOARD_FILE):
+        try:
+            with open(LEADERBOARD_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                leaderboard_cache = sorted(
+                    data,
+                    key=lambda item: (item.get("score", 0), item.get("accuracy", 0)),
+                    reverse=True
+                )
+            else:
+                leaderboard_cache = []
+        except Exception:
+            leaderboard_cache = []
+    else:
+        leaderboard_cache = []
+    return leaderboard_cache
+
+
+def get_leaderboard():
+    global leaderboard_last_refresh
+    now = datetime.now()
+    if leaderboard_last_refresh is None or (now - leaderboard_last_refresh).total_seconds() >= 3600:
+        load_leaderboard_file()
+        leaderboard_last_refresh = now
+    return leaderboard_cache
+
+
+def save_leaderboard_entry(score_value, accuracy_value, grade_value, difficulty_value):
+    entry = {
+        "score": int(score_value),
+        "accuracy": round(float(accuracy_value), 1),
+        "grade": grade_value,
+        "difficulty": difficulty_value,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    data = load_leaderboard_file()
+    data.append(entry)
+    data = sorted(
+        data,
+        key=lambda item: (item.get("score", 0), item.get("accuracy", 0)),
+        reverse=True
+    )[:10]
+    with open(LEADERBOARD_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    return data
 
 # COLORI
 WHITE = (255, 255, 255)
@@ -40,11 +148,13 @@ ORANGE = (255, 165, 0)
 LIGHT_BLUE = (100, 200, 255)
 CYAN = (0, 255, 255)
 
-lane_width = 70
-lane_offset = 500
-hit_line_y = HEIGHT - 120
+lane_width = max(56, min(110, int(WIDTH * 0.08)))
+lane_spacing = max(12, int(WIDTH * 0.012))
+lane_group_width = 4 * lane_width + 3 * lane_spacing
+lane_offset = max(0, (WIDTH - lane_group_width) // 2)
+hit_line_y = int(HEIGHT * 0.84)
 note_speed = 5
-hit_window_total = 60 
+hit_window_total = 65
 
 font = pygame.font.SysFont("arial", 40)
 big_font = pygame.font.SysFont("arial", 50, bold=True)
@@ -59,6 +169,16 @@ key_map = {
     pygame.K_UP: 2,
     pygame.K_RIGHT: 3
 }
+
+difficulty_levels = {
+    "easy": {"speed": 7.0, "label": "Easy"},
+    "medium": {"speed": 9.0, "label": "Medium"},
+    "hard": {"speed": 11.0, "label": "Hard"},
+    "extreme": {"speed": 13.5, "label": "Extreme"},
+    "impossible": {"speed": 16.5, "label": "Impossible"}
+}
+
+difficulty_order = list(difficulty_levels.keys())
 
 # ------------------------
 # CARICAMENTO IMMAGINI FRECCE
@@ -76,72 +196,67 @@ for i in range(4):
 # ------------------------
 # SFONDO MENU (LIVELLO DI GAMEPLAY SCORREVOLE)
 # ------------------------
-menu_arrows = []
-for _ in range(12):
-    lane = random.randint(0, 3)
-    x = lane_offset + lane * lane_width + lane_width // 2
-    y = random.randint(-600, 0)
-    speed = random.uniform(2.5, 4.5)
-    menu_arrows.append([lane, x, y, speed])
-
 def draw_menu_background():
+    # Sfondo principale: gradiente pieno schermo
     for y in range(HEIGHT):
-        color = (15, 15, 30 + y // 12)
-        pygame.draw.line(screen, color, (0, y), (WIDTH, y))
-    
-    for i in range(1, 4):
-        x = lane_offset + i * lane_width
-        for y in range(0, HEIGHT, 30):
-            pygame.draw.line(screen, (40, 40, 60), (x, y), (x, y + 15), 2)
+        t = y / max(1, HEIGHT - 1)
+        r = int(6 + (18 - 6) * t)
+        g = int(10 + (32 - 10) * t)
+        b = int(24 + (62 - 24) * t)
+        pygame.draw.line(screen, (r, g, b), (0, y), (WIDTH, y))
 
+    # Glow centrale molto grande, per evitare il senso di sfondo "ristretto"
+    glow = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+    for radius in range(int(min(WIDTH, HEIGHT) * 0.18), int(min(WIDTH, HEIGHT) * 0.06), -20):
+        pygame.draw.circle(
+            glow,
+            (0, 80, 180, 12),
+            (WIDTH // 2, int(HEIGHT * 0.68)),
+            radius
+        )
+    screen.blit(glow, (0, 0))
+
+    # Linee guida centrali, ma senza spostarle troppo a destra
+    center_x = WIDTH // 2
+    guide_left = center_x - int(lane_group_width * 0.5)
+    for i in range(5):
+        x = guide_left + i * (lane_width + lane_spacing)
+        pygame.draw.line(screen, (30, 35, 65), (x, 0), (x, HEIGHT), 1)
+
+    # Frecce animate leggermente sparse sullo sfondo
     for arrow in menu_arrows:
         img = arrow_images[arrow[0]].copy()
-        img.set_alpha(80) 
+        img.set_alpha(50)
         rect = img.get_rect(center=(arrow[1], int(arrow[2])))
         screen.blit(img, rect)
         arrow[2] += arrow[3]
         if arrow[2] - 30 > HEIGHT:
             arrow[0] = random.randint(0, 3)
-            arrow[1] = lane_offset + arrow[0] * lane_width + lane_width // 2
-            arrow[2] = random.randint(-150, -50)
-            arrow[3] = random.uniform(2.5, 4.5)
+            arrow[1] = center_x - int(lane_group_width * 0.5) + arrow[0] * (lane_width + lane_spacing) + lane_width // 2
+            arrow[2] = random.randint(-140, -30)
+            arrow[3] = random.uniform(2.2, 4.2)
 
 # ------------------------
 # GENERAZIONE MONTAGNE PIXELATE (VETTORI FISSI)
 # ------------------------
-mountain_far = []
-mountain_near = []
-
-x_pop = 0
-while x_pop < WIDTH + 40:
-    h = random.randint(280, 380)
-    mountain_far.append((x_pop, h))
-    x_pop += 40
-
-x_pop = 0
-while x_pop < WIDTH + 25:
-    h = random.randint(380, 460)
-    mountain_near.append((x_pop, h))
-    x_pop += 25
-
 # ------------------------
 # NUOVO SFONDO GIOCO: TRAMONTO IN MONTAGNA PIXELATA
 # ------------------------
 def draw_game_background():
     for y in range(HEIGHT):
-        if y < 250:
-            r = int(30 + (180 - 30) * (y / 250))
-            g = int(20 + (50 - 20) * (y / 250))
-            b = int(60 + (80 - 60) * (y / 250))
+        if y < HEIGHT * 0.35:
+            r = int(30 + (180 - 30) * (y / (HEIGHT * 0.35)))
+            g = int(20 + (50 - 20) * (y / (HEIGHT * 0.35)))
+            b = int(60 + (80 - 60) * (y / (HEIGHT * 0.35)))
         else:
-            factor = (y - 250) / (HEIGHT - 250)
+            factor = (y - HEIGHT * 0.35) / (HEIGHT - HEIGHT * 0.35)
             r = int(180 + (255 - 180) * factor)
             g = int(50 + (170 - 50) * factor)
             b = int(80 + (30 - 80) * factor)
         pygame.draw.line(screen, (r, g, b), (0, y), (WIDTH, y))
 
-    pygame.draw.circle(screen, (255, 210, 40), (WIDTH // 2, 380), 90)
-    for sy in range(300, 470, 12):
+    pygame.draw.circle(screen, (255, 210, 40), (WIDTH // 2, int(HEIGHT * 0.62)), int(min(WIDTH, HEIGHT) * 0.13))
+    for sy in range(int(HEIGHT * 0.48), int(HEIGHT * 0.78), max(8, int(HEIGHT * 0.02))):
         pygame.draw.line(screen, (210, 70, 60), (0, sy), (WIDTH, sy), 3)
 
     for i in range(len(mountain_far) - 1):
@@ -160,16 +275,20 @@ def draw_game_background():
 class Note:
     def __init__(self, lane):
         self.lane = lane
-        self.x = lane_offset + lane * lane_width + lane_width // 2
+        self.x = lane_offset + lane * (lane_width + lane_spacing) + lane_width // 2
         self.y = -50
+        self.image = arrow_images[lane]
+        self.rect = self.image.get_rect(center=(self.x, self.y))
 
     def update(self):
         self.y += note_speed
+        self.rect = self.image.get_rect(center=(self.x, int(self.y)))
 
     def draw(self):
-        img = arrow_images[self.lane]
-        rect = img.get_rect(center=(self.x, self.y))
-        screen.blit(img, rect)
+        screen.blit(self.image, self.rect)
+
+    def is_hit(self, target_y):
+        return abs(self.rect.centery - target_y) <= hit_window_total
 
 # ------------------------
 # PERSONAGGIO A DESTRA, RIVOLTO VERSO SINISTRA
@@ -248,7 +367,9 @@ def loading_screen():
                 sys.exit()
             
             if event.type == pygame.KEYDOWN:
-                if event.key in key_map:
+                if event.key == pygame.K_F11:
+                    toggle_fullscreen()
+                elif event.key in key_map:
                     if key_map[event.key] == interactive_target_lane:
                         score_mini_game += 1
                         interactive_target_lane = random.randint(0, 3)
@@ -303,38 +424,88 @@ def loading_screen():
 # MENU PRINCIPALE
 # ------------------------
 def menu():
-    menu_selection = 0 
+    menu_selection = 0
+    leaderboard_open = False
 
     while True:
         draw_menu_background()
         title = big_font.render("GIOCO DI MOMO E LORE", True, WHITE)
         screen.blit(title, (WIDTH//2 - title.get_width()//2, 150))
 
-        play_btn = pygame.Rect(WIDTH//2 - 120, 300, 240, 75)
-        exit_btn = pygame.Rect(WIDTH//2 - 120, 400, 240, 75)
+        if leaderboard_open:
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 180))
+            screen.blit(overlay, (0, 0))
 
-        pygame.draw.rect(screen, LIGHT_BLUE if menu_selection == 0 else BLUE, play_btn, border_radius=15)
-        play_text = font.render("GIOCA", True, (0, 40, 80) if menu_selection == 0 else WHITE)
-        screen.blit(play_text, (play_btn.centerx - play_text.get_width()//2, play_btn.centery - play_text.get_height()//2))
+            panel = pygame.Rect(WIDTH//2 - 360, HEIGHT//2 - 240, 720, 480)
+            pygame.draw.rect(screen, DARK_GRAY, panel, border_radius=18)
+            pygame.draw.rect(screen, GOLD, panel, width=3, border_radius=18)
 
-        pygame.draw.rect(screen, (255, 120, 120) if menu_selection == 1 else GRAY, exit_btn, border_radius=15)
-        exit_text = font.render("ESCI", True, (80, 0, 0) if menu_selection == 1 else WHITE)
-        screen.blit(exit_text, (exit_btn.centerx - exit_text.get_width()//2, exit_btn.centery - exit_text.get_height()//2))
+            board_title = big_font.render("CLASSIFICA", True, GOLD)
+            screen.blit(board_title, (panel.centerx - board_title.get_width()//2, panel.y + 18))
+
+            entries = get_leaderboard()
+            y = panel.y + 90
+            for i, entry in enumerate(entries[:8]):
+                rank = f"{i+1}."
+                rank_surf = stats_font.render(rank, True, WHITE)
+                score_surf = stats_font.render(f"{entry.get('score', 0)}", True, WHITE)
+                acc_surf = stats_font.render(f"{entry.get('accuracy', 0):.1f}%", True, WHITE)
+                grade_surf = stats_font.render(entry.get('grade', '-'), True, GOLD)
+                diff_surf = stats_font.render(entry.get('difficulty', '-'), True, CYAN)
+                time_surf = stats_font.render(entry.get('timestamp', ''), True, GRAY)
+
+                screen.blit(rank_surf, (panel.x + 30, y))
+                screen.blit(score_surf, (panel.x + 90, y))
+                screen.blit(acc_surf, (panel.x + 210, y))
+                screen.blit(grade_surf, (panel.x + 330, y))
+                screen.blit(diff_surf, (panel.x + 400, y))
+                screen.blit(time_surf, (panel.x + 520, y))
+                y += 48
+
+            if not entries:
+                empty_text = font.render("Nessun risultato ancora", True, WHITE)
+                screen.blit(empty_text, (panel.centerx - empty_text.get_width()//2, panel.centery))
+
+            exit_hint = stats_font.render("Premi ESC per tornare", True, WHITE)
+            screen.blit(exit_hint, (panel.centerx - exit_hint.get_width()//2, panel.bottom - 35))
+        else:
+            play_btn = pygame.Rect(WIDTH//2 - 120, 300, 240, 75)
+            leaderboard_btn = pygame.Rect(WIDTH//2 - 160, 395, 320, 75)
+            exit_btn = pygame.Rect(WIDTH//2 - 120, 490, 240, 75)
+
+            pygame.draw.rect(screen, LIGHT_BLUE if menu_selection == 0 else BLUE, play_btn, border_radius=15)
+            play_text = font.render("GIOCA", True, (0, 40, 80) if menu_selection == 0 else WHITE)
+            screen.blit(play_text, (play_btn.centerx - play_text.get_width()//2, play_btn.centery - play_text.get_height()//2))
+
+            pygame.draw.rect(screen, LIGHT_BLUE if menu_selection == 1 else BLUE, leaderboard_btn, border_radius=15)
+            board_text = font.render("CLASSIFICA", True, (0, 40, 80) if menu_selection == 1 else WHITE)
+            screen.blit(board_text, (leaderboard_btn.centerx - board_text.get_width()//2, leaderboard_btn.centery - board_text.get_height()//2))
+
+            pygame.draw.rect(screen, (255, 120, 120) if menu_selection == 2 else GRAY, exit_btn, border_radius=15)
+            exit_text = font.render("ESCI", True, (80, 0, 0) if menu_selection == 2 else WHITE)
+            screen.blit(exit_text, (exit_btn.centerx - exit_text.get_width()//2, exit_btn.centery - exit_text.get_height()//2))
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
-                
+
             if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_UP or event.key == pygame.K_DOWN:
-                    menu_selection = (menu_selection + 1) % 2
-                
-                if event.key == pygame.K_RETURN:
+                if event.key == pygame.K_F11:
+                    toggle_fullscreen()
+                elif leaderboard_open:
+                    if event.key == pygame.K_ESCAPE:
+                        leaderboard_open = False
+                elif event.key == pygame.K_UP or event.key == pygame.K_DOWN:
+                    menu_selection = (menu_selection + 1) % 3
+                elif event.key == pygame.K_RETURN:
                     if menu_selection == 0:
-                        loading_screen() 
-                        return 
+                        loading_screen()
+                        return
                     elif menu_selection == 1:
+                        leaderboard_open = True
+                    elif menu_selection == 2:
                         pygame.quit()
                         sys.exit()
 
@@ -345,10 +516,14 @@ def menu():
 # GIOCO PRINCIPALE
 # ------------------------
 def game():
-    global FPS, music_enabled, fps_index
+    global FPS, music_enabled, fps_index, note_speed
+
+    difficulty_index = 1
+    difficulty = difficulty_order[difficulty_index]
+    note_speed = difficulty_levels[difficulty]["speed"]
     
     def reset_level():
-        nonlocal score, health, notes, hit_notes, total_notes_spawned, combo_count, counts, start_time, last_beat_index, total_pause_duration, rating_timer, current_rating
+        nonlocal score, health, notes, hit_notes, total_notes_spawned, combo_count, counts, start_time, last_beat_index, total_pause_duration, rating_timer, current_rating, game_over_selection, show_game_over_menu, animation_timer, go_x, level_time_expired
         score = 0
         health = 100
         notes = []
@@ -361,11 +536,59 @@ def game():
         total_pause_duration = 0
         rating_timer = 0
         current_rating = ""
+        game_over_selection = 0
+        show_game_over_menu = False
+        animation_timer = 0
+        go_x = WIDTH + game_over_text.get_width()
+        level_time_expired = False
         if music_loaded and music_enabled:
             try:
                 pygame.mixer.music.stop()
                 pygame.mixer.music.play(-1)
             except: pass
+
+    # Schermata di selezione difficoltà prima di iniziare
+    selecting_difficulty = True
+    while selecting_difficulty:
+        clock.tick(FPS)
+        draw_game_background()
+
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180))
+        screen.blit(overlay, (0, 0))
+
+        title = big_font.render("SELEZIONA DIFFICOLTÀ", True, GOLD)
+        screen.blit(title, (WIDTH // 2 - title.get_width() // 2, HEIGHT // 2 - 180))
+
+        for i, name in enumerate(difficulty_order):
+            y = HEIGHT // 2 - 80 + i * 60
+            rect = pygame.Rect(WIDTH // 2 - 140, y, 280, 48)
+            selected = i == difficulty_index
+            pygame.draw.rect(screen, LIGHT_BLUE if selected else BLUE, rect, border_radius=12)
+            label = small_font.render(difficulty_levels[name]["label"], True, (0, 40, 80) if selected else WHITE)
+            screen.blit(label, (rect.centerx - label.get_width() // 2, rect.centery - label.get_height() // 2))
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_F11:
+                    toggle_fullscreen()
+                elif event.key == pygame.K_UP:
+                    difficulty_index = (difficulty_index - 1) % len(difficulty_order)
+                elif event.key == pygame.K_DOWN:
+                    difficulty_index = (difficulty_index + 1) % len(difficulty_order)
+                elif event.key == pygame.K_RETURN:
+                    difficulty = difficulty_order[difficulty_index]
+                    note_speed = difficulty_levels[difficulty]["speed"]
+                    selecting_difficulty = False
+                elif event.key == pygame.K_ESCAPE:
+                    return
+
+        difficulty = difficulty_order[difficulty_index]
+        note_speed = difficulty_levels[difficulty]["speed"]
+        pygame.display.flip()
 
     score = 0
     health = 100
@@ -385,11 +608,16 @@ def game():
     go_x = WIDTH + game_over_text.get_width() 
     go_target_x = final_go_x
     animation_timer = 0
+    game_over_selection = 0
+    show_game_over_menu = False
+    leaderboard_saved = False
 
     current_rating = ""
     rating_color = WHITE
     rating_timer = 0
-    max_rating_duration = 25 
+    max_rating_duration = 25
+    level_duration_seconds = 90
+    level_time_expired = False
 
     if music_loaded and music_enabled:
         try: pygame.mixer.music.play(-1)
@@ -425,7 +653,9 @@ def game():
                 sys.exit()
 
             if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_RETURN:
+                if event.key == pygame.K_F11:
+                    toggle_fullscreen()
+                elif event.key == pygame.K_RETURN:
                     if game_state == "PLAYING":
                         game_state = "PAUSED"
                         pause_selection = 0 
@@ -454,6 +684,19 @@ def game():
                         elif options_selection == 2: 
                             game_state = "PAUSED"
                             pause_selection = 2
+                    elif game_state in ["GAMEOVER", "LEVEL_FINISHED"] and show_game_over_menu:
+                        if game_over_selection == 0:
+                            reset_level()
+                            game_state = "PLAYING"
+                            show_game_over_menu = False
+                            if music_loaded and music_enabled:
+                                try:
+                                    pygame.mixer.music.stop()
+                                    pygame.mixer.music.play(-1)
+                                except: pass
+                        elif game_over_selection == 1:
+                            if music_loaded: pygame.mixer.music.stop()
+                            return
 
                 if game_state in ["PAUSED", "OPTIONS"]:
                     if event.key == pygame.K_UP:
@@ -462,6 +705,11 @@ def game():
                     elif event.key == pygame.K_DOWN:
                         if game_state == "PAUSED": pause_selection = (pause_selection + 1) % 4 
                         else: options_selection = (options_selection + 1) % 3
+                elif game_state in ["GAMEOVER", "LEVEL_FINISHED"] and show_game_over_menu:
+                    if event.key == pygame.K_UP:
+                        game_over_selection = (game_over_selection - 1) % 2
+                    elif event.key == pygame.K_DOWN:
+                        game_over_selection = (game_over_selection + 1) % 2
 
                 if game_state == "OPTIONS" and options_selection == 1:
                     if event.key == pygame.K_LEFT:
@@ -475,39 +723,38 @@ def game():
                     lane = key_map[event.key]
                     hit = False
                     for note in notes:
-                        if note.lane == lane:
-                            distance = abs(note.y - hit_line_y)
-                            if distance <= hit_window_total:
-                                notes.remove(note)
-                                player.dash(lane)
-                                total_notes_spawned += 1
-                                hit_notes += 1
-                                hit = True
-                                
-                                if distance <= 15:
-                                    combo_count += 1
-                                    counts["PERFECT"] += 1
-                                    current_rating, rating_color = "PERFECT", GOLD
-                                    score += 15
-                                    health = min(max_health, health + 5)
-                                elif distance <= 35:
-                                    combo_count += 1
-                                    counts["GOOD"] += 1
-                                    current_rating, rating_color = "GOOD", GREEN
-                                    score += 10
-                                    health = min(max_health, health + 3)
-                                else:
-                                    combo_count = 0 
-                                    counts["BAD"] += 1
-                                    current_rating, rating_color = "BAD", ORANGE
-                                    score += 2
-                                    
-                                rating_timer = max_rating_duration 
-                                break
+                        if note.lane == lane and note.is_hit(hit_line_y):
+                            distance = abs(note.rect.centery - hit_line_y)
+                            notes.remove(note)
+                            player.dash(lane)
+                            total_notes_spawned += 1
+                            hit_notes += 1
+                            hit = True
+
+                            if distance <= 15:
+                                combo_count += 1
+                                counts["PERFECT"] += 1
+                                current_rating, rating_color = "PERFECT", GOLD
+                                score += 15
+                                health = min(max_health, health + 5)
+                            elif distance <= 35:
+                                combo_count += 1
+                                counts["GOOD"] += 1
+                                current_rating, rating_color = "GOOD", GREEN
+                                score += 10
+                                health = min(max_health, health + 3)
+                            else:
+                                combo_count = 0
+                                counts["BAD"] += 1
+                                current_rating, rating_color = "BAD", ORANGE
+                                score += 2
+
+                            rating_timer = max_rating_duration
+                            break
                     if not hit:
                         health -= 5
                         total_notes_spawned += 1
-                        combo_count = 0 
+                        combo_count = 0
                         counts["TRASH"] += 1
                         current_rating, rating_color = "TRASH", RED
                         rating_timer = max_rating_duration
@@ -515,35 +762,44 @@ def game():
 
         if game_state == "PLAYING":
             current_game_time = pygame.time.get_ticks() - start_time - total_pause_duration
-            current_beat_index = int(current_game_time / ms_per_beat)
-            
-            if current_beat_index > last_beat_index:
-                notes.append(Note(random.randint(0, 3)))
-                last_beat_index = current_beat_index
-
-            for note in notes[:]:
-                note.update()
-                if note.y > HEIGHT:
-                    notes.remove(note)
-                    health -= 5 
-                    total_notes_spawned += 1
-                    combo_count = 0 
-                    counts["MISS"] += 1
-                    current_rating, rating_color = "MISS", DARK_RED
-                    rating_timer = max_rating_duration
-                    if health < 0: health = 0
-
-            player.update()
-            if health <= 0:
-                game_state = "GAMEOVER"
+            if current_game_time >= level_duration_seconds * 1000:
+                game_state = "LEVEL_FINISHED"
                 if music_loaded: pygame.mixer.music.stop()
-                player.death_y = player.y
+            else:
+                current_beat_index = int(current_game_time / ms_per_beat)
+                
+                if current_beat_index > last_beat_index:
+                    notes.append(Note(random.randint(0, 3)))
+                    last_beat_index = current_beat_index
+
+                for note in notes[:]:
+                    note.update()
+                    if note.y > HEIGHT:
+                        notes.remove(note)
+                        health -= 5 
+                        total_notes_spawned += 1
+                        combo_count = 0 
+                        counts["MISS"] += 1
+                        current_rating, rating_color = "MISS", DARK_RED
+                        rating_timer = max_rating_duration
+                        if health < 0: health = 0
+
+                player.update()
+                if health <= 0:
+                    game_state = "GAMEOVER"
+                    if music_loaded: pygame.mixer.music.stop()
+                    player.death_y = player.y
 
         if game_state == "GAMEOVER":
             player.update_death()
 
+        if game_state == "LEVEL_FINISHED":
+            if not level_time_expired:
+                level_time_expired = True
+            show_game_over_menu = True
+
         for i in range(4):
-            x = lane_offset + i * lane_width + lane_width // 2
+            x = lane_offset + i * (lane_width + lane_spacing) + lane_width // 2
             screen.blit(arrow_images[i], arrow_images[i].get_rect(center=(x, hit_line_y)))
 
         for note in notes: note.draw()
@@ -552,13 +808,31 @@ def game():
 
         if game_state in ["PLAYING", "PAUSED", "OPTIONS"]:
             screen.blit(font.render(f"Score: {score}", True, WHITE), (10, 10))
+
+            if game_state == "PLAYING":
+                elapsed_ms = pygame.time.get_ticks() - start_time - total_pause_duration
+                remaining_seconds = max(0, level_duration_seconds - int(elapsed_ms / 1000))
+                mins = remaining_seconds // 60
+                secs = remaining_seconds % 60
+                timer_text = f"Tempo: {mins:02d}:{secs:02d}"
+                timer_surf = font.render(timer_text, True, WHITE)
+                screen.blit(timer_surf, (WIDTH // 2 - timer_surf.get_width() // 2, 10))
+
             pygame.draw.rect(screen, GRAY, (10, 65, 200, 25), border_radius=5)
             current_bar_width = int((health / max_health) * 200)
             if current_bar_width > 0:
                 pygame.draw.rect(screen, GREEN if health > 30 else RED, (10, 65, current_bar_width, 25), border_radius=5)
             screen.blit(small_font.render(f"HP: {health}%", True, WHITE), (15, 40))
 
-            accuracy = (hit_notes / total_notes_spawned) * 100 if total_notes_spawned > 0 else 100.0
+            total_judgments = max(1, total_notes_spawned)
+            weighted_score = (
+                counts["PERFECT"] * 100 +
+                counts["GOOD"] * 92 +
+                counts["BAD"] * 70 +
+                counts["TRASH"] * 35 +
+                counts["MISS"] * 0
+            )
+            accuracy = (weighted_score / (total_judgments * 100)) * 100 if total_judgments > 0 else 100.0
             acc_txt = font.render(f"Accuracy: {accuracy:.1f}%", True, WHITE)
             screen.blit(acc_txt, (WIDTH - acc_txt.get_width() - 20, 10))
             
@@ -656,7 +930,72 @@ def game():
             screen.blit(game_over_text, rect)
             if go_x <= go_target_x:
                 animation_timer += 1
-                if animation_timer > 180: return
+                if animation_timer > 180:
+                    show_game_over_menu = True
+
+        if game_state in ["GAMEOVER", "LEVEL_FINISHED"] and show_game_over_menu:
+            if not leaderboard_saved:
+                final_accuracy = (hit_notes / total_notes_spawned) * 100 if total_notes_spawned > 0 else 0.0
+                if final_accuracy >= 98:
+                    grade, grade_color, grade_desc = "Z", (255, 215, 0), "Sei IL Maestro"
+                elif final_accuracy >= 95:
+                    grade, grade_color, grade_desc = "S", (255, 215, 0), "Sei Spettacolare!"
+                elif final_accuracy >= 90:
+                    grade, grade_color, grade_desc = "A", (0, 230, 255), "Niente Male"
+                elif final_accuracy >= 80:
+                    grade, grade_color, grade_desc = "B", (0, 200, 120), "Benino"
+                elif final_accuracy >= 70:
+                    grade, grade_color, grade_desc = "C", (140, 220, 255), "Non Male Ma Nemmeno Bene"
+                elif final_accuracy >= 60:
+                    grade, grade_color, grade_desc = "D", (255, 180, 80), "Male"
+                else:
+                    grade, grade_color, grade_desc = "F", (255, 80, 80), "Terribile"
+                save_leaderboard_entry(score, final_accuracy, grade, difficulty_levels[difficulty]["label"])
+                leaderboard_saved = True
+
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 180))
+            screen.blit(overlay, (0, 0))
+
+            end_title = "TEMPO SCADUTO" if game_state == "LEVEL_FINISHED" else "SEI MORTO"
+            menu_title = big_font.render(end_title, True, RED)
+            screen.blit(menu_title, (WIDTH // 2 - menu_title.get_width() // 2, HEIGHT // 2 - 180))
+
+            final_accuracy = (hit_notes / total_notes_spawned) * 100 if total_notes_spawned > 0 else 0.0
+            if final_accuracy >= 98:
+                grade, grade_color, grade_desc = "Z", (255, 215, 0), "Sei IL Maestro"
+            elif final_accuracy >= 95:
+                grade, grade_color, grade_desc = "S", (255, 215, 0), "Sei Spettacolare!"
+            elif final_accuracy >= 90:
+                grade, grade_color, grade_desc = "A", (0, 230, 255), "Niente Male"
+            elif final_accuracy >= 80:
+                grade, grade_color, grade_desc = "B", (0, 200, 120), "Benino"
+            elif final_accuracy >= 70:
+                grade, grade_color, grade_desc = "C", (140, 220, 255), "Non Male Ma Nemmeno Bene"
+            elif final_accuracy >= 60:
+                grade, grade_color, grade_desc = "D", (255, 180, 80), "Male"
+            else:
+                grade, grade_color, grade_desc = "F", (255, 80, 80), "Terribile"
+
+            acc_text = big_font.render(f"Percentuale: {final_accuracy:.1f}%", True, WHITE)
+            screen.blit(acc_text, (WIDTH // 2 - acc_text.get_width() // 2, HEIGHT // 2 - 110))
+
+            grade_text = big_font.render(f"Voto: {grade}", True, grade_color)
+            screen.blit(grade_text, (WIDTH // 2 - grade_text.get_width() // 2, HEIGHT // 2 - 50))
+
+            grade_desc_text = small_font.render(grade_desc, True, grade_color)
+            screen.blit(grade_desc_text, (WIDTH // 2 - grade_desc_text.get_width() // 2, HEIGHT // 2 - 10))
+
+            btn_retry = pygame.Rect(WIDTH // 2 - 160, HEIGHT // 2 + 40, 320, 55)
+            btn_exit = pygame.Rect(WIDTH // 2 - 160, HEIGHT // 2 + 110, 320, 55)
+
+            pygame.draw.rect(screen, LIGHT_BLUE if game_over_selection == 0 else BLUE, btn_retry, border_radius=15)
+            retry_text = small_font.render("Rifai il livello", True, (0, 40, 80) if game_over_selection == 0 else WHITE)
+            screen.blit(retry_text, (btn_retry.centerx - retry_text.get_width() // 2, btn_retry.centery - retry_text.get_height() // 2))
+
+            pygame.draw.rect(screen, (255, 120, 120) if game_over_selection == 1 else GRAY, btn_exit, border_radius=15)
+            exit_text = small_font.render("Esci", True, (80, 0, 0) if game_over_selection == 1 else WHITE)
+            screen.blit(exit_text, (btn_exit.centerx - exit_text.get_width() // 2, btn_exit.centery - exit_text.get_height() // 2))
 
         pygame.display.flip()
 
